@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Chat, Plan, Brief, Settings } from "./chat-parts";
 
 // ---------- constantes ----------
 const STATUSES = [["nuevo", "Nuevo"], ["contactado", "Contactado"], ["respondio", "Respondió"], ["llamada", "Llamada agendada"], ["propuesta", "Propuesta enviada"], ["cliente", "Cliente"], ["descartado", "Descartado"]];
@@ -71,6 +72,9 @@ async function api(path, opts = {}) {
 
 // ---------- iconos ----------
 const I = {
+  chat: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5h16v11H9l-5 4z" /><path d="M8.5 10.5h.01M12 10.5h.01M15.5 10.5h.01" strokeWidth="2.6" /></svg>,
+  plan: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6h11M9 12h11M9 18h11" /><path d="M3.5 6l1.2 1.2L7 5M3.5 12l1.2 1.2L7 11" /><circle cx="5" cy="18" r="1.3" /></svg>,
+  brief: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="4" width="17" height="16" rx="2" /><path d="M7.5 8.5h9M7.5 12h9M7.5 15.5h5" /></svg>,
   hoy: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>,
   pipeline: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><rect x="3" y="4" width="5" height="16" rx="1.5" /><rect x="10" y="4" width="5" height="11" rx="1.5" /><rect x="17" y="4" width="4" height="7" rx="1.5" /></svg>,
   scan: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2M11 8v6M8 11h6" /></svg>,
@@ -83,7 +87,10 @@ const Logo = ({ size = 30 }) => (
 
 // ---------- app ----------
 export default function App() {
-  const [tab, setTab] = useState("hoy");
+  const [tab, setTab] = useState("chat");
+  const [plan, setPlan] = useState(null);
+  const [briefs, setBriefs] = useState(null);
+  const [showCtx, setShowCtx] = useState(false);
   const [leads, setLeads] = useState(null);
   const [ideas, setIdeas] = useState(null);
   const [runs, setRuns] = useState([]);
@@ -99,7 +106,13 @@ export default function App() {
     api("/api/ideas").then((j) => setIdeas(j.ideas)).catch(() => setIdeas([]));
     api("/api/council").then((j) => setRuns(j.runs)).catch(() => {});
     api("/api/providers").then((j) => setProviders(j.providers)).catch(() => {});
+    loadPlan();
+    api("/api/briefs").then((j) => setBriefs(j.briefs)).catch(() => setBriefs([]));
   }, []);
+  function loadPlan() { api("/api/plan").then((j) => setPlan(j.items)).catch(() => setPlan([])); }
+  async function vote(winner, input) {
+    try { const { run } = await api("/api/council", { method: "POST", body: JSON.stringify({ task: "chat", input: input.slice(0, 500), outputs: {}, winner }) }); if (run) setRuns((r) => [run, ...r]); say("Voto guardado"); } catch (e) { say(e.message); }
+  }
 
   async function patchLead(id, p, msg = "Guardado") {
     try {
@@ -107,14 +120,24 @@ export default function App() {
       setLeads((ls) => ls.map((l) => (l.id === id ? lead : l))); say(msg);
     } catch (e) { say(e.message); }
   }
-  function toCouncil(p) { setPreset({ ...p, at: Date.now() }); setOpenLead(null); setTab("council"); }
+  function toCouncil(p) {
+    const l = p.leadId ? (leads || []).find((x) => x.id === p.leadId) : null;
+    let text = p.text || "";
+    if (l && p.task === "copy") text = `Mejorad este primer mensaje para este negocio. Que suene humano, corto, sin vender en el primer mensaje y adaptado a su país. Dadme la versión final lista para enviar.\n\n${leadContext(l)}\n\nMensaje actual:\n${l.message || "(sin mensaje)"}`;
+    else if (l) text = `Analizad este negocio. ¿Qué sistema o agente de IA le propondría Heme, qué problema le resuelve, cuánto cobrarle y cómo abro la conversación? Si no merece la pena, decídmelo.\n\n${leadContext(l)}`;
+    else if (p.text && p.task === "contenido") text = `Convertid esta idea en contenido listo para publicar (gancho, guion o carrusel, copy y CTA):\n\n${p.text}`;
+    else if (p.text && p.task === "copy") text = `Tengo esta idea de cliente/nicho. ¿Merece la pena? ¿Qué le vendo y cómo le escribo?\n\n${p.text}`;
+    else if (p.text) text = `Tengo esta idea de sistema/agente de IA. ¿Cómo la implementaríais, a quién se la vendo y cuánto cobro?\n\n${p.text}`;
+    setPreset({ text, at: Date.now() }); setOpenLead(null); setTab("chat");
+  }
   async function logout() { await fetch("/api/logout", { method: "POST" }); location.href = "/login"; }
 
   const L = leads || [];
   const hot = L.filter((l) => (l.score || 0) >= 8 && l.status === "nuevo").length;
   const follow = L.filter(needsFollowUp).length;
   const lead = openLead ? L.find((l) => l.id === openLead) : null;
-  const nav = [["hoy", "Hoy", I.hoy, follow ? `${follow}` : "", follow > 0], ["pipeline", "Pipeline", I.pipeline, `${L.length || ""}`], ["scan", "Prospectar", I.scan, ""], ["council", "Consejo IA", I.council, ""], ["ideas", "Ideas", I.ideas, `${ideas?.length || ""}`]];
+  const planOpen = (plan || []).filter((x) => x.status !== "hecho").length;
+  const nav = [["chat", "Consejo", I.chat, ""], ["hoy", "Hoy", I.hoy, follow ? `${follow}` : "", follow > 0], ["plan", "Plan", I.plan, planOpen ? `${planOpen}` : ""], ["brief", "Brief", I.brief, ""], ["pipeline", "Pipeline", I.pipeline, `${L.length || ""}`], ["scan", "Prospectar", I.scan, ""], ["ideas", "Ideas", I.ideas, `${ideas?.length || ""}`]];
 
   return (
     <div className="app">
@@ -134,19 +157,23 @@ export default function App() {
               <div key={s.key} className="model-row"><span className={`dot${p?.ready ? "" : " off"}`} style={{ background: s.color }} />{s.name}<span className="st">{p ? (p.ready ? "conectado" : "sin clave") : "…"}</span></div>
             ); })}
           </div>
+          <button className="ghost" onClick={() => setShowCtx(true)}>Lo que saben de ti</button>
           <button className="ghost" onClick={logout}>Salir</button>
         </div>
       </aside>
 
-      <main className="main">
-        {tab === "hoy" && <Hoy leads={leads} runs={runs} ideas={ideas} hot={hot} follow={follow} open={setOpenLead} go={setTab} />}
+      <main className={`main${tab === "chat" ? " main-chat" : ""}`}>
+        {tab === "chat" && <Chat providers={providers} preset={preset} say={say} onPlanAdded={loadPlan} onVote={vote} onSettings={() => setShowCtx(true)} />}
+        {tab === "hoy" && <Hoy leads={leads} runs={runs} ideas={ideas} plan={plan} briefs={briefs} hot={hot} follow={follow} open={setOpenLead} go={setTab} />}
+        {tab === "plan" && <Plan items={plan} setItems={setPlan} say={say} />}
+        {tab === "brief" && <Brief briefs={briefs} setBriefs={setBriefs} say={say} />}
         {tab === "pipeline" && <Pipeline leads={leads} open={setOpenLead} go={setTab} />}
         {tab === "scan" && <Scan leads={leads} setLeads={setLeads} go={setTab} />}
-        {tab === "council" && <Council leads={L} providers={providers} runs={runs} setRuns={setRuns} preset={preset} say={say} />}
         {tab === "ideas" && <Ideas ideas={ideas} setIdeas={setIdeas} say={say} toCouncil={toCouncil} />}
       </main>
 
       {lead && <Drawer l={lead} close={() => setOpenLead(null)} patch={patchLead} say={say} toCouncil={toCouncil} />}
+      {showCtx && <Settings close={() => setShowCtx(false)} say={say} />}
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
@@ -162,7 +189,7 @@ function Header({ title, accent, sub, children }) {
 }
 
 // ---------- Hoy ----------
-function Hoy({ leads, runs, ideas, hot, follow, open, go }) {
+function Hoy({ leads, runs, ideas, plan, briefs, hot, follow, open, go }) {
   const L = leads || [];
   const h = new Date().getHours();
   const hello = h < 13 ? "Buenos días" : h < 20 ? "Buenas tardes" : "Buenas noches";
@@ -181,7 +208,7 @@ function Hoy({ leads, runs, ideas, hot, follow, open, go }) {
     <div className="fade">
       <Header title={hello + ","} accent="Marcelo" sub={`${date.charAt(0).toUpperCase() + date.slice(1)} · lo que mueve el dinero hoy`}>
         <button className="btn" onClick={() => go("scan")}>Prospectar</button>
-        <button className="btn primary" onClick={() => go("council")}>Convocar consejo</button>
+        <button className="btn primary" onClick={() => go("chat")}>Hablar con el consejo</button>
       </Header>
       <section className="kpis">
         <div className="panel kpi"><span className="lbl">Contactos esta semana</span><b>{weekContacted}<span style={{ fontSize: 20, color: "var(--dim)" }}> / {WEEK_GOAL}</span></b><div className="goal"><i style={{ width: `${Math.min(100, (weekContacted / WEEK_GOAL) * 100)}%` }} /></div></div>
@@ -210,7 +237,16 @@ function Hoy({ leads, runs, ideas, hot, follow, open, go }) {
                 <div key={w.key} className="board-row"><span style={{ color: w.color, fontWeight: 600 }}>{w.name}</span><div className="bar"><i style={{ width: `${(w.n / maxWins) * 100}%`, background: w.color }} /></div><span>{w.n}</span></div>
               ))}
             </div>
-            <p className="sub" style={{ fontSize: 13 }}>{runs.length ? `${runs.length} sesiones · gana quien eliges tú` : "Aún no hay sesiones. Convoca la primera."}</p>
+            <p className="sub" style={{ fontSize: 13 }}>{runs.length ? `${runs.length} sesiones · gana quien eliges tú` : "Vota la mejor idea en cada deliberación del consejo."}</p>
+          </section>
+          <section className="panel">
+            <div className="row"><span className="lbl">Brief de hoy</span><span className="grow" /><button className="btn sm" onClick={() => go("brief")}>Leer</button></div>
+            {briefs?.[0] ? <p style={{ margin: "10px 0 0", fontSize: 14, color: "var(--muted)" }}>{briefs[0].content.replace(/[#*`]/g, "").split("\n").filter((x) => x.trim()).slice(1, 3).join(" ").slice(0, 220)}…</p> : <p className="sub" style={{ fontSize: 13 }}>Aún no hay brief. Genera el primero.</p>}
+          </section>
+          <section className="panel">
+            <div className="row"><span className="lbl">Plan en marcha</span><span className="grow" /><button className="btn sm" onClick={() => go("plan")}>Abrir</button></div>
+            {(plan || []).filter((x) => x.status !== "hecho").slice(0, 4).map((x) => <p key={x.id} style={{ margin: "10px 0 0", fontSize: 14 }}>{x.status === "en marcha" ? "◐" : "○"} {x.title}</p>)}
+            {plan && !plan.filter((x) => x.status !== "hecho").length && <p className="sub" style={{ fontSize: 13 }}>Nada pendiente. Acepta propuestas del consejo.</p>}
           </section>
           <section className="panel">
             <div className="row"><span className="lbl">Ideas recientes</span><span className="grow" /><button className="btn sm" onClick={() => go("ideas")}>Abrir</button></div>
@@ -391,160 +427,6 @@ function Scan({ leads, setLeads, go }) {
   );
 }
 
-// ---------- Consejo IA ----------
-function Council({ leads, providers, runs, setRuns, preset, say }) {
-  const [task, setTask] = useState("implementacion");
-  const [leadId, setLeadId] = useState("");
-  const [input, setInput] = useState("");
-  const [seats, setSeats] = useState({});
-  const [run, setRun] = useState(null);
-  const [fusion, setFusion] = useState("");
-  const [fusing, setFusing] = useState(false);
-  const busy = Object.values(seats).some((s) => s.loading);
-
-  useEffect(() => {
-    if (!preset) return;
-    if (preset.task) setTask(preset.task);
-    if (preset.leadId) { setLeadId(preset.leadId); const l = leads.find((x) => x.id === preset.leadId); if (l) setInput(leadContext(l)); }
-    if (preset.text) { setLeadId(""); setInput(preset.text); }
-    setSeats({}); setRun(null); setFusion("");
-  }, [preset?.at]); // eslint-disable-line
-
-  function pickLead(id) { setLeadId(id); const l = leads.find((x) => x.id === id); setInput(l ? leadContext(l) : ""); }
-
-  async function convene() {
-    if (!input.trim()) return;
-    setFusion(""); setRun(null);
-    setSeats(Object.fromEntries(SEATS.map((s) => [s.key, { loading: true }])));
-    const results = {};
-    await Promise.all(SEATS.map(async (s) => {
-      try {
-        const j = await api("/api/council/ask", { method: "POST", body: JSON.stringify({ provider: s.key, task, input }) });
-        results[s.key] = j.text; setSeats((x) => ({ ...x, [s.key]: { text: j.text, ms: j.ms } }));
-      } catch (e) { setSeats((x) => ({ ...x, [s.key]: { error: e.message } })); }
-    }));
-    try {
-      const { run: r } = await api("/api/council", { method: "POST", body: JSON.stringify({ task, input, lead_id: leadId || null, outputs: results }) });
-      setRun(r); setRuns((rs) => [r, ...rs]);
-    } catch (e) { say(e.message); }
-  }
-  async function choose(key) {
-    if (!run) return;
-    try { const { run: r } = await api(`/api/council/${run.id}`, { method: "PATCH", body: JSON.stringify({ winner: key }) }); setRun(r); setRuns((rs) => rs.map((x) => (x.id === r.id ? r : x))); say(`Gana ${SEATS.find((s) => s.key === key).name}`); } catch (e) { say(e.message); }
-  }
-  async function fuse() {
-    setFusing(true);
-    try {
-      const outputs = Object.fromEntries(Object.entries(seats).filter(([, v]) => v.text).map(([k, v]) => [k, v.text]));
-      const j = await api("/api/council/fuse", { method: "POST", body: JSON.stringify({ id: run?.id, task, input, outputs }) });
-      setFusion(j.fusion);
-    } catch (e) { say(e.message); }
-    setFusing(false);
-  }
-  function reopen(r) {
-    setTask(r.task); setInput(r.input); setLeadId(r.lead_id || ""); setRun(r); setFusion(r.fusion || "");
-    setSeats(Object.fromEntries(SEATS.map((s) => [s.key, r.outputs?.[s.key] ? { text: r.outputs[s.key] } : { error: "Sin respuesta en esta sesión." }])));
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-  const anyText = Object.values(seats).some((s) => s.text);
-  const byTask = Object.keys(TASK_INFO).map((t) => ({ t, wins: SEATS.map((s) => runs.filter((r) => r.task === t && r.winner === s.key).length) })).filter((x) => x.wins.some(Boolean));
-
-  return (
-    <div className="fade">
-      <Header title="Consejo" accent="IA" sub="Claude, ChatGPT y Grok responden a lo mismo. Tú eliges al ganador y el marcador aprende quién es mejor en cada tarea." />
-      <section className="panel" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div>
-          <span className="lbl">1 · Qué necesitas</span>
-          <div className="task-grid" style={{ marginTop: 10 }}>
-            {Object.entries(TASK_INFO).map(([k, [label, desc]]) => (
-              <button key={k} className="task" aria-pressed={task === k} onClick={() => setTask(k)}><b>{label}</b><small>{desc}</small></button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <span className="lbl">2 · Sobre qué</span>
-          <div className="row" style={{ marginTop: 10, alignItems: "stretch" }}>
-            <select value={leadId} onChange={(e) => pickLead(e.target.value)} style={{ maxWidth: 340 }} aria-label="Elegir lead">
-              <option value="">Texto libre (o elige un lead)</option>
-              {[...leads].sort((a, b) => (b.score || 0) - (a.score || 0)).map((l) => <option key={l.id} value={l.id}>{l.score} · {l.name}</option>)}
-            </select>
-          </div>
-          <textarea style={{ marginTop: 10, minHeight: 120 }} value={input} onChange={(e) => setInput(e.target.value)} placeholder="Describe el negocio, la idea o lo que quieres preguntar…" aria-label="Contexto" />
-        </div>
-        <div className="row">
-          <button className="btn primary" onClick={convene} disabled={busy || !input.trim()}>{busy ? <><span className="spin" /> El consejo está pensando…</> : "Convocar al consejo"}</button>
-          {providers && SEATS.filter((s) => !providers[s.key]?.ready).length > 0 && (
-            <span className="sub" style={{ margin: 0, fontSize: 13 }}>Sin clave: {SEATS.filter((s) => !providers[s.key]?.ready).map((s) => s.name).join(", ")}. Añádelas en Vercel para activarlos.</span>
-          )}
-        </div>
-      </section>
-
-      {Object.keys(seats).length > 0 && (
-        <div className="council">
-          {SEATS.map((s) => {
-            const st = seats[s.key] || {}; const win = run?.winner === s.key;
-            return (
-              <section key={s.key} className={`seat fade${win ? " win" : ""}`} style={{ "--seat": s.color }}>
-                <div className="seat-h"><span className="dot" style={{ background: s.color }} /><b>{s.name}</b><small>{providers?.[s.key]?.model || ""}{st.ms ? <><br />{(st.ms / 1000).toFixed(1)} s</> : null}</small></div>
-                <div className="seat-b">
-                  {st.loading && <div className="shimmer">{[90, 75, 85, 60, 80, 45].map((w, i) => <i key={i} style={{ width: `${w}%` }} />)}</div>}
-                  {st.error && <p style={{ color: "var(--bad)" }}>{st.error}</p>}
-                  {st.text && <div dangerouslySetInnerHTML={{ __html: md(st.text) }} />}
-                </div>
-                <div className="seat-f">
-                  <button className="btn sm" disabled={!st.text || !run} onClick={() => choose(s.key)} style={win ? { borderColor: s.color, color: s.color } : undefined}>{win ? "★ Ganador" : "Elegir esta"}</button>
-                  <button className="btn sm" disabled={!st.text} onClick={() => navigator.clipboard.writeText(st.text).then(() => say("Copiado"))}>Copiar</button>
-                </div>
-              </section>
-            );
-          })}
-        </div>
-      )}
-
-      {anyText && !busy && (
-        <section className="panel fusion fade">
-          <div className="row"><span className="lbl" style={{ color: "var(--accent)" }}>Fusión · lo mejor de los tres</span><span className="grow" />
-            <button className="btn sm primary" onClick={fuse} disabled={fusing}>{fusing ? <><span className="spin" /> Fusionando…</> : fusion ? "Volver a fusionar" : "Fusionar lo mejor"}</button>
-            {fusion && <button className="btn sm" onClick={() => navigator.clipboard.writeText(fusion).then(() => say("Copiado"))}>Copiar</button>}
-          </div>
-          {fusion ? <div className="seat-b" style={{ padding: "12px 0 0", maxHeight: "none" }} dangerouslySetInnerHTML={{ __html: md(fusion) }} /> : <p className="sub" style={{ fontSize: 13 }}>Claude lee las tres respuestas y crea una versión final con lo mejor de cada una.</p>}
-        </section>
-      )}
-
-      <div className="hoy-grid" style={{ marginTop: 16 }}>
-        <section className="panel">
-          <span className="lbl">Historial</span>
-          <div className="history" style={{ marginTop: 8 }}>
-            {!runs.length && <p className="sub" style={{ fontSize: 13 }}>Aquí aparecerá cada sesión del consejo.</p>}
-            {runs.slice(0, 12).map((r) => {
-              const w = SEATS.find((s) => s.key === r.winner);
-              return (
-                <button key={r.id} onClick={() => reopen(r)}>
-                  <span className="pill">{TASK_INFO[r.task]?.[0] || r.task}</span>
-                  <small>{(r.input || "").split("\n")[0]}</small>
-                  <span style={{ fontSize: 12, color: w ? w.color : "var(--dim)", fontWeight: 600 }}>{w ? `★ ${w.name}` : "Sin elegir"}</span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-        <section className="panel">
-          <span className="lbl">Quién gana en cada tarea</span>
-          {!byTask.length && <p className="sub" style={{ fontSize: 13 }}>Elige ganadores y aquí verás qué modelo es mejor para cada cosa.</p>}
-          {byTask.map(({ t, wins }) => {
-            const max = Math.max(...wins); const leader = SEATS[wins.indexOf(max)];
-            return (
-              <div key={t} style={{ marginTop: 14 }}>
-                <div className="row"><b style={{ fontSize: 14 }}>{TASK_INFO[t][0]}</b><span className="grow" /><span style={{ fontSize: 12, color: leader.color, fontWeight: 600 }}>Lidera {leader.name}</span></div>
-                <div className="board">{SEATS.map((s, i) => <div key={s.key} className="board-row"><span style={{ color: s.color }}>{s.name}</span><div className="bar"><i style={{ width: `${max ? (wins[i] / max) * 100 : 0}%`, background: s.color }} /></div><span>{wins[i]}</span></div>)}</div>
-              </div>
-            );
-          })}
-        </section>
-      </div>
-    </div>
-  );
-}
 
 // ---------- Ideas ----------
 function Ideas({ ideas, setIdeas, say, toCouncil }) {
