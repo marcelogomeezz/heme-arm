@@ -14,7 +14,11 @@ const PRESETS = [
 
 const DAY = 86400000;
 const needsFollowUp = (l) => l.status === "contactado" && l.contacted_at && Date.now() - new Date(l.contacted_at).getTime() > 2 * DAY;
-const waLink = (phone, msg) => { const d = (phone || "").replace(/[^\d]/g, ""); return d ? `https://wa.me/${d}?text=${encodeURIComponent(msg || "")}` : null; };
+const digits = (p) => (p || "").replace(/[^\d]/g, "");
+// Móvil = puede tener WhatsApp. España: +34 6/7. Venezuela: +58 4. Otros países: se asume que sí.
+const isMobile = (p) => { const d = digits(p); if (!d) return false; if (d.startsWith("34")) return /^34[67]/.test(d); if (d.startsWith("58")) return /^584/.test(d); return true; };
+const waNumber = (l) => (l.whatsapp && digits(l.whatsapp)) ? l.whatsapp : (isMobile(l.phone) ? l.phone : "");
+const waLink = (phone, msg) => { const d = digits(phone); return d ? `https://wa.me/${d}?text=${encodeURIComponent(msg || "")}` : null; };
 const igLink = (ig) => { if (!ig) return null; if (ig.startsWith("http")) return ig; return `https://instagram.com/${ig.replace(/^@/, "")}`; };
 
 async function api(path, opts = {}) {
@@ -126,7 +130,8 @@ function LeadCard({ l, patch, say }) {
   const [msg, setMsg] = useState(l.message || "");
   const [notes, setNotes] = useState(l.notes || "");
   const s = l.score || 0;
-  const wa = waLink(l.phone, l.message);
+  const wa = waLink(waNumber(l), l.message);
+  const landline = l.phone && !isMobile(l.phone);
   const ig = igLink(l.instagram);
 
   function copy() {
@@ -185,7 +190,20 @@ function LeadCard({ l, patch, say }) {
             </>
           )}
         </div>
-        {l.phone && <span className="phone">{l.phone}</span>}
+        {l.phone && (
+          <div className="row">
+            <span className="phone">{l.phone}{landline ? " · fijo, sin WhatsApp: llama" : ""}</span>
+            {landline && <a className="btn" href={`tel:${digits(l.phone)}`}>Llamar</a>}
+          </div>
+        )}
+        {l.whatsapp && digits(l.whatsapp) !== digits(l.phone) && <span className="phone">WhatsApp: {l.whatsapp}</span>}
+        {!wa && (
+          <div className="row">
+            <input type="text" placeholder="¿Encontraste su WhatsApp? Pégalo aquí" defaultValue="" aria-label={`WhatsApp de ${l.name}`}
+              onKeyDown={(e) => { if (e.key === "Enter" && e.currentTarget.value.trim()) patch(l.id, { whatsapp: e.currentTarget.value.trim() }, "WhatsApp guardado"); }} />
+            <span className="phone">Enter para guardar</span>
+          </div>
+        )}
         <div className="row">
           <select value={l.status} onChange={(e) => patch(l.id, { status: e.target.value })} aria-label={`Estado de ${l.name}`}>
             {STATUSES.map(([v, lb]) => <option key={v} value={v}>{lb}</option>)}
